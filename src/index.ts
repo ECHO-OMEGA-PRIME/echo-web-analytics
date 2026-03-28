@@ -71,7 +71,7 @@ function daysAgo(n: number): string {
 }
 
 export default {
-  async fetch(req: Request, env: Env): Promise<Response> {
+  async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Access-Control-Allow-Headers': '*' } });
 
     try {
@@ -128,15 +128,15 @@ export default {
 
       if (body.event === 'leave' && body.duration_ms) {
         // Update duration on last pageview for this session
-        (async () => {
-          await env.DB.prepare("UPDATE pageviews SET duration_ms=?, is_bounce=0 WHERE site_id=? AND session_id=? AND id=(SELECT MAX(id) FROM pageviews WHERE site_id=? AND session_id=?)")
-            .bind(Math.min(body.duration_ms, 3600000), body.site_id, body.session_id || '', body.site_id, body.session_id || '').run();
-        })();
+        ctx.waitUntil(
+          env.DB.prepare("UPDATE pageviews SET duration_ms=?, is_bounce=0 WHERE site_id=? AND session_id=? AND id=(SELECT MAX(id) FROM pageviews WHERE site_id=? AND session_id=?)")
+            .bind(Math.min(body.duration_ms, 3600000), body.site_id, body.session_id || '', body.site_id, body.session_id || '').run()
+        );
         return json({ ok: true });
       }
 
-      // Insert pageview (fire and forget)
-      (async () => {
+      // Insert pageview — use ctx.waitUntil to ensure write completes
+      ctx.waitUntil((async () => {
         await env.DB.prepare('INSERT INTO pageviews (site_id, pathname, hostname, referrer, referrer_domain, utm_source, utm_medium, utm_campaign, utm_term, utm_content, country, region, city, device_type, browser, os, screen_width, visitor_id, session_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
           .bind(body.site_id, sanitize(body.pathname || '/', 500), hostname, sanitize(body.referrer || '', 1000), referrerDomain, utm_source, utm_medium, utm_campaign, utm_term, utm_content, country, region, city, device, browser, os, body.screen_width || 0, visitorId, body.session_id || '').run();
 
@@ -152,7 +152,7 @@ export default {
               .bind(g.id, body.site_id, visitorId, body.session_id || '').run();
           }
         }
-      })();
+      })());
 
       return json({ ok: true });
     }
