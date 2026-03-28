@@ -65,6 +65,11 @@ function extractDomain(url: string): string {
   try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; }
 }
 
+/** Compute ISO date string N days ago — avoids interpolating days into SQL */
+function daysAgo(n: number): string {
+  return new Date(Date.now() - n * 86400000).toISOString().split('T')[0];
+}
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Access-Control-Allow-Headers': '*' } });
@@ -175,11 +180,12 @@ export default {
       // Return aggregate data
       const period = url.searchParams.get('period') || '7d';
       const days = period === '30d' ? 30 : period === '24h' ? 1 : 7;
-      const stats = await env.DB.prepare(`SELECT SUM(pageviews) as pv, SUM(visitors) as vis, SUM(sessions) as sess, SUM(bounces) as bounces, AVG(avg_duration_ms) as avg_dur FROM daily_stats WHERE site_id=? AND date >= date('now', '-${days} days')`).bind(siteId).first<any>();
-      const pages = await env.DB.prepare(`SELECT pathname, SUM(pageviews) as pv, SUM(visitors) as vis FROM daily_pages WHERE site_id=? AND date >= date('now', '-${days} days') GROUP BY pathname ORDER BY pv DESC LIMIT 20`).bind(siteId).all();
-      const referrers = await env.DB.prepare(`SELECT referrer_domain, SUM(pageviews) as pv FROM daily_referrers WHERE site_id=? AND date >= date('now', '-${days} days') GROUP BY referrer_domain ORDER BY pv DESC LIMIT 20`).bind(siteId).all();
-      const countries = await env.DB.prepare(`SELECT country, SUM(pageviews) as pv FROM daily_countries WHERE site_id=? AND date >= date('now', '-${days} days') GROUP BY country ORDER BY pv DESC LIMIT 20`).bind(siteId).all();
-      const daily = await env.DB.prepare(`SELECT * FROM daily_stats WHERE site_id=? AND date >= date('now', '-${days} days') ORDER BY date`).bind(siteId).all();
+      const since = daysAgo(days);
+      const stats = await env.DB.prepare('SELECT SUM(pageviews) as pv, SUM(visitors) as vis, SUM(sessions) as sess, SUM(bounces) as bounces, AVG(avg_duration_ms) as avg_dur FROM daily_stats WHERE site_id=? AND date >= ?').bind(siteId, since).first<any>();
+      const pages = await env.DB.prepare('SELECT pathname, SUM(pageviews) as pv, SUM(visitors) as vis FROM daily_pages WHERE site_id=? AND date >= ? GROUP BY pathname ORDER BY pv DESC LIMIT 20').bind(siteId, since).all();
+      const referrers = await env.DB.prepare('SELECT referrer_domain, SUM(pageviews) as pv FROM daily_referrers WHERE site_id=? AND date >= ? GROUP BY referrer_domain ORDER BY pv DESC LIMIT 20').bind(siteId, since).all();
+      const countries = await env.DB.prepare('SELECT country, SUM(pageviews) as pv FROM daily_countries WHERE site_id=? AND date >= ? GROUP BY country ORDER BY pv DESC LIMIT 20').bind(siteId, since).all();
+      const daily = await env.DB.prepare('SELECT * FROM daily_stats WHERE site_id=? AND date >= ? ORDER BY date').bind(siteId, since).all();
       return json({
         site: { id: (site as any).id, domain: (site as any).domain, name: (site as any).name },
         period, stats: { pageviews: stats?.pv || 0, visitors: stats?.vis || 0, sessions: stats?.sess || 0, bounce_rate: (stats?.sess || 0) > 0 ? ((stats?.bounces || 0) / (stats?.sess || 1) * 100).toFixed(1) + '%' : '0%', avg_duration_s: Math.round((stats?.avg_dur || 0) / 1000) },
@@ -222,8 +228,9 @@ export default {
       const cached = await env.CACHE.get(cacheKey);
       if (cached) return json(JSON.parse(cached));
 
-      const stats = await env.DB.prepare(`SELECT SUM(pageviews) as pv, SUM(visitors) as vis, SUM(sessions) as sess, SUM(bounces) as bounces, AVG(avg_duration_ms) as avg_dur FROM daily_stats WHERE site_id=? AND date >= date('now', '-${days} days')`).bind(siteId).first<any>();
-      const daily = await env.DB.prepare(`SELECT * FROM daily_stats WHERE site_id=? AND date >= date('now', '-${days} days') ORDER BY date`).bind(siteId).all();
+      const since = daysAgo(days);
+      const stats = await env.DB.prepare('SELECT SUM(pageviews) as pv, SUM(visitors) as vis, SUM(sessions) as sess, SUM(bounces) as bounces, AVG(avg_duration_ms) as avg_dur FROM daily_stats WHERE site_id=? AND date >= ?').bind(siteId, since).first<any>();
+      const daily = await env.DB.prepare('SELECT * FROM daily_stats WHERE site_id=? AND date >= ? ORDER BY date').bind(siteId, since).all();
       const result = {
         pageviews: stats?.pv || 0, visitors: stats?.vis || 0, sessions: stats?.sess || 0,
         bounce_rate: (stats?.sess || 0) > 0 ? ((stats?.bounces || 0) / (stats?.sess || 1) * 100).toFixed(1) + '%' : '0%',
@@ -237,37 +244,42 @@ export default {
     if (m === 'GET' && p.match(/^\/api\/sites\/[a-zA-Z0-9]+\/pages$/)) {
       const siteId = p.split('/')[3];
       const days = parseInt(url.searchParams.get('days') || '7');
-      const r = await env.DB.prepare(`SELECT pathname, SUM(pageviews) as pv, SUM(visitors) as vis, AVG(avg_duration_ms) as avg_dur FROM daily_pages WHERE site_id=? AND date >= date('now', '-${days} days') GROUP BY pathname ORDER BY pv DESC LIMIT 50`).bind(siteId).all();
+      const since = daysAgo(days);
+      const r = await env.DB.prepare('SELECT pathname, SUM(pageviews) as pv, SUM(visitors) as vis, AVG(avg_duration_ms) as avg_dur FROM daily_pages WHERE site_id=? AND date >= ? GROUP BY pathname ORDER BY pv DESC LIMIT 50').bind(siteId, since).all();
       return json({ pages: r.results || [] });
     }
 
     if (m === 'GET' && p.match(/^\/api\/sites\/[a-zA-Z0-9]+\/referrers$/)) {
       const siteId = p.split('/')[3];
       const days = parseInt(url.searchParams.get('days') || '7');
-      const r = await env.DB.prepare(`SELECT referrer_domain, SUM(pageviews) as pv, SUM(visitors) as vis FROM daily_referrers WHERE site_id=? AND date >= date('now', '-${days} days') GROUP BY referrer_domain ORDER BY pv DESC LIMIT 50`).bind(siteId).all();
+      const since = daysAgo(days);
+      const r = await env.DB.prepare('SELECT referrer_domain, SUM(pageviews) as pv, SUM(visitors) as vis FROM daily_referrers WHERE site_id=? AND date >= ? GROUP BY referrer_domain ORDER BY pv DESC LIMIT 50').bind(siteId, since).all();
       return json({ referrers: r.results || [] });
     }
 
     if (m === 'GET' && p.match(/^\/api\/sites\/[a-zA-Z0-9]+\/sources$/)) {
       const siteId = p.split('/')[3];
       const days = parseInt(url.searchParams.get('days') || '7');
-      const r = await env.DB.prepare(`SELECT utm_source, utm_medium, utm_campaign, SUM(pageviews) as pv, SUM(visitors) as vis FROM daily_sources WHERE site_id=? AND date >= date('now', '-${days} days') GROUP BY utm_source ORDER BY pv DESC LIMIT 50`).bind(siteId).all();
+      const since = daysAgo(days);
+      const r = await env.DB.prepare('SELECT utm_source, utm_medium, utm_campaign, SUM(pageviews) as pv, SUM(visitors) as vis FROM daily_sources WHERE site_id=? AND date >= ? GROUP BY utm_source ORDER BY pv DESC LIMIT 50').bind(siteId, since).all();
       return json({ sources: r.results || [] });
     }
 
     if (m === 'GET' && p.match(/^\/api\/sites\/[a-zA-Z0-9]+\/devices$/)) {
       const siteId = p.split('/')[3];
       const days = parseInt(url.searchParams.get('days') || '7');
-      const devices = await env.DB.prepare(`SELECT device_type, SUM(pageviews) as pv FROM daily_devices WHERE site_id=? AND date >= date('now', '-${days} days') GROUP BY device_type ORDER BY pv DESC`).bind(siteId).all();
-      const browsers = await env.DB.prepare(`SELECT browser, SUM(pageviews) as pv FROM daily_devices WHERE site_id=? AND date >= date('now', '-${days} days') GROUP BY browser ORDER BY pv DESC LIMIT 10`).bind(siteId).all();
-      const oses = await env.DB.prepare(`SELECT os, SUM(pageviews) as pv FROM daily_devices WHERE site_id=? AND date >= date('now', '-${days} days') GROUP BY os ORDER BY pv DESC LIMIT 10`).bind(siteId).all();
+      const since = daysAgo(days);
+      const devices = await env.DB.prepare('SELECT device_type, SUM(pageviews) as pv FROM daily_devices WHERE site_id=? AND date >= ? GROUP BY device_type ORDER BY pv DESC').bind(siteId, since).all();
+      const browsers = await env.DB.prepare('SELECT browser, SUM(pageviews) as pv FROM daily_devices WHERE site_id=? AND date >= ? GROUP BY browser ORDER BY pv DESC LIMIT 10').bind(siteId, since).all();
+      const oses = await env.DB.prepare('SELECT os, SUM(pageviews) as pv FROM daily_devices WHERE site_id=? AND date >= ? GROUP BY os ORDER BY pv DESC LIMIT 10').bind(siteId, since).all();
       return json({ devices: devices.results || [], browsers: browsers.results || [], operating_systems: oses.results || [] });
     }
 
     if (m === 'GET' && p.match(/^\/api\/sites\/[a-zA-Z0-9]+\/countries$/)) {
       const siteId = p.split('/')[3];
       const days = parseInt(url.searchParams.get('days') || '7');
-      const r = await env.DB.prepare(`SELECT country, SUM(pageviews) as pv, SUM(visitors) as vis FROM daily_countries WHERE site_id=? AND date >= date('now', '-${days} days') GROUP BY country ORDER BY pv DESC LIMIT 50`).bind(siteId).all();
+      const since = daysAgo(days);
+      const r = await env.DB.prepare('SELECT country, SUM(pageviews) as pv, SUM(visitors) as vis FROM daily_countries WHERE site_id=? AND date >= ? GROUP BY country ORDER BY pv DESC LIMIT 50').bind(siteId, since).all();
       return json({ countries: r.results || [] });
     }
 
@@ -305,8 +317,9 @@ export default {
     if (m === 'GET' && p.match(/^\/api\/sites\/[a-zA-Z0-9]+\/export$/)) {
       const siteId = p.split('/')[3];
       const days = Math.min(parseInt(url.searchParams.get('days') || '30'), 90);
-      const stats = await env.DB.prepare(`SELECT * FROM daily_stats WHERE site_id=? AND date >= date('now', '-${days} days') ORDER BY date`).bind(siteId).all();
-      const pages = await env.DB.prepare(`SELECT * FROM daily_pages WHERE site_id=? AND date >= date('now', '-${days} days') ORDER BY date, pageviews DESC`).bind(siteId).all();
+      const since = daysAgo(days);
+      const stats = await env.DB.prepare('SELECT * FROM daily_stats WHERE site_id=? AND date >= ? ORDER BY date').bind(siteId, since).all();
+      const pages = await env.DB.prepare('SELECT * FROM daily_pages WHERE site_id=? AND date >= ? ORDER BY date, pageviews DESC').bind(siteId, since).all();
       return json({ daily_stats: stats.results || [], daily_pages: pages.results || [] });
     }
 
