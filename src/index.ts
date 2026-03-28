@@ -68,7 +68,7 @@ export default {
     const m = req.method;
 
     // ── Public endpoints ──
-    if (p === '/health') return json({ status: 'healthy', service: 'echo-web-analytics', version: '1.0.0', timestamp: new Date().toISOString() });
+    if (p === '/health' || p === '/') return json({ status: 'healthy', service: 'echo-web-analytics', version: '1.0.0', timestamp: new Date().toISOString() });
 
     // ── Tracking script (public, no auth) ──
     if (m === 'GET' && p === '/script.js') {
