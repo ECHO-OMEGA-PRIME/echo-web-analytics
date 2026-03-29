@@ -188,7 +188,7 @@ export default {
       const daily = await env.DB.prepare('SELECT * FROM daily_stats WHERE site_id=? AND date >= ? ORDER BY date').bind(siteId, since).all();
       return json({
         site: { id: (site as any).id, domain: (site as any).domain, name: (site as any).name },
-        period, stats: { pageviews: stats?.pv || 0, visitors: stats?.vis || 0, sessions: stats?.sess || 0, bounce_rate: (stats?.sess || 0) > 0 ? ((stats?.bounces || 0) / (stats?.sess || 1) * 100).toFixed(1) + '%' : '0%', avg_duration_s: Math.round((stats?.avg_dur || 0) / 1000) },
+        period, stats: { pageviews: stats?.pv || 0, visitors: stats?.vis || 0, sessions: stats?.sess || 0, bounce_rate: (stats?.sess || 0) > 0 ? Math.min(100, (stats?.bounces || 0) / (stats?.sess || 1) * 100).toFixed(1) + '%' : '0%', avg_duration_s: Math.round((stats?.avg_dur || 0) / 1000) },
         pages: pages.results || [], referrers: referrers.results || [], countries: countries.results || [], daily: daily.results || []
       });
     }
@@ -210,6 +210,18 @@ export default {
     if (m === 'GET' && p === '/api/sites') {
       const r = await env.DB.prepare('SELECT * FROM sites WHERE tenant_id=? ORDER BY created_at DESC').bind(tid).all();
       return json({ sites: r.results || [] });
+    }
+    if (m === 'PATCH' && p.match(/^\/api\/sites\/[a-zA-Z0-9]+$/)) {
+      const id = p.split('/')[3];
+      const body = await req.json<any>();
+      const sets: string[] = [];
+      const vals: any[] = [];
+      if (body.name !== undefined) { sets.push('name=?'); vals.push(sanitize(body.name, 200)); }
+      if (body.public_dashboard !== undefined) { sets.push('public_dashboard=?'); vals.push(body.public_dashboard ? 1 : 0); }
+      if (!sets.length) return err('Nothing to update');
+      vals.push(id, tid);
+      await env.DB.prepare(`UPDATE sites SET ${sets.join(', ')} WHERE id=? AND tenant_id=?`).bind(...vals).run();
+      return json({ ok: true });
     }
     if (m === 'DELETE' && p.match(/^\/api\/sites\/[a-zA-Z0-9]+$/)) {
       const id = p.split('/')[3];
@@ -233,7 +245,7 @@ export default {
       const daily = await env.DB.prepare('SELECT * FROM daily_stats WHERE site_id=? AND date >= ? ORDER BY date').bind(siteId, since).all();
       const result = {
         pageviews: stats?.pv || 0, visitors: stats?.vis || 0, sessions: stats?.sess || 0,
-        bounce_rate: (stats?.sess || 0) > 0 ? ((stats?.bounces || 0) / (stats?.sess || 1) * 100).toFixed(1) + '%' : '0%',
+        bounce_rate: (stats?.sess || 0) > 0 ? Math.min(100, (stats?.bounces || 0) / (stats?.sess || 1) * 100).toFixed(1) + '%' : '0%',
         avg_duration_s: Math.round((stats?.avg_dur || 0) / 1000),
         daily: daily.results || []
       };
